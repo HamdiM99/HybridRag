@@ -22,58 +22,57 @@ recherche en langage naturel → API + interface simple → déploiement cloud.
 The pipeline combines multimodal CV extraction, deterministic experience calculation, and hybrid retrieval in a shared processing architecture.
 
 ```mermaid
-flowchart TB
-    CV(["📄 CV Documents<br/>PDF · DOCX · PPTX"])
+flowchart LR
+    CV(["📄 CV<br/>PDF · DOCX · PPTX"])
 
-    subgraph ING["01 · Document Ingestion"]
+    subgraph ING["01 · Ingestion"]
         direction TB
         EXT["Text Extraction<br/>PyMuPDF · python-docx · python-pptx"]
-        CHECK{"Sufficient text?"}
+        CHECK{"Text sufficient?"}
         VIS["Vision Fallback<br/>Images → GPT-5"]
         LLM["Structured LLM Extraction<br/>GPT-5 · Pydantic"]
-        RAW["CVExtraction<br/>Raw dates · No calculations"]
+        RAW["CVExtraction<br/>Raw dates"]
 
         EXT --> CHECK
         CHECK -->|Yes| LLM
-        CHECK -->|No, images available| VIS
+        CHECK -->|No + images| VIS
         VIS --> LLM
         LLM --> RAW
     end
 
-    subgraph PROC["02 · Deterministic Processing"]
+    subgraph PROC["02 · Processing"]
         direction TB
-        EXP["Experience Calculation<br/>100% code · Unit-tested"]
-        MERGE["Merge Overlapping Date Ranges"]
-        PROFILE[("CVProfile<br/>JSON · File-hash cache")]
+        EXP["Deterministic Experience<br/>Calculation · Unit-tested"]
+        MERGE["Merge Overlapping<br/>Date Ranges"]
+        PROFILE[("CVProfile<br/>JSON · Hash Cache")]
 
         EXP --> MERGE --> PROFILE
     end
 
     subgraph IDX["03 · Indexing"]
         direction TB
-        CHUNK["Section-based Chunking"]
+        CHUNK["Section-based<br/>Chunking"]
         EMB["Embeddings<br/>text-embedding-3-large<br/>Reduced dimensions"]
-        STORE[("Local Hybrid Store<br/>Dense Vectors + BM25")]
+        STORE[("Hybrid Store<br/>Dense + BM25")]
 
         CHUNK --> EMB --> STORE
     end
 
-    QUERY(["🔎 Natural Language Query"])
-
-    subgraph RET["04 · Hybrid Retrieval"]
+    subgraph RET["04 · Retrieval"]
         direction TB
+        QUERY(["🔎 Natural Language Query"])
         PARSE["Query Understanding<br/>LLM → SearchFilters"]
-        FILTER["Hard Filters + Semantic Query"]
+        FILTER["Hard Filters +<br/>Semantic Query"]
         SEARCH["Dense Search + BM25"]
-        RRF["Rank Fusion<br/>RRF + Hard Filters"]
+        RRF["Fusion<br/>RRF + Hard Filters"]
 
-        PARSE --> FILTER --> SEARCH --> RRF
+        QUERY --> PARSE --> FILTER --> SEARCH --> RRF
     end
 
-    subgraph RANK["05 · Ranking & Results"]
+    subgraph RANK["05 · Results"]
         direction TB
         RERANK["Reranking + Explanation<br/>LLM · Top ~12"]
-        OUT(["Ranked CV Results<br/>Scores + Evidence-grounded Explanations"])
+        OUT(["Ranked CVs<br/>Scores + Evidence-grounded<br/>Explanations"])
 
         RERANK --> OUT
     end
@@ -81,7 +80,6 @@ flowchart TB
     CV --> EXT
     RAW --> EXP
     PROFILE --> CHUNK
-    QUERY --> PARSE
     STORE --> SEARCH
     RRF --> RERANK
 
@@ -108,6 +106,7 @@ flowchart TB
     style IDX fill:#FFFBEB,stroke:#FCD34D,stroke-width:1px
     style RET fill:#EEF2FF,stroke:#A5B4FC,stroke-width:1px
     style RANK fill:#F0FDFA,stroke:#5EEAD4,stroke-width:1px
+
 ```
 
 ### Access Interfaces
