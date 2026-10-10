@@ -17,61 +17,114 @@ recherche en langage naturel → API + interface simple → déploiement cloud.
 - [Tests et évaluation](#tests-et-évaluation)
 - [Limites connues](#limites-connues)
 - [Passage en production](#passage-en-production)
-
 ## Architecture
 
-```
- CV (PDF / DOCX / PPTX)
-        │
-        ▼
- ┌─────────────────┐   texte insuffisant + images présentes
- │ Extraction texte │──────────────────────────────┐
- │ (PyMuPDF /       │                               ▼
- │  python-docx /   │                     ┌───────────────────┐
- │  python-pptx)    │                     │ Fallback vision    │
- └────────┬─────────┘                     │ (image → gpt-5)    │
-          │ texte suffisant               └─────────┬──────────┘
-          ▼                                          │
- ┌─────────────────────────────┐                     │
- │ Extraction LLM structurée   │◄────────────────────┘
- │ (gpt-5, sortie Pydantic)    │
- └────────────┬─────────────────┘
-              │ CVExtraction (dates brutes, pas de calcul)
-              ▼
- ┌─────────────────────────────┐
- │ Calcul déterministe des     │  ← 100% code, testé unitairement
- │ années d'expérience         │    (fusion des chevauchements de dates)
- └────────────┬─────────────────┘
-              ▼
-        CVProfile (JSON, cache par hash de fichier)
-              │
-              ▼
- ┌─────────────────────────────┐
- │ Chunking par section +      │
- │ embeddings (text-embedding- │
- │ 3-large, dim réduite)       │
- └────────────┬─────────────────┘
-              ▼
-     Store local (dense + BM25)
-              ▲
-              │ requête langage naturel
- ┌────────────┴─────────────────┐
- │ Compréhension de requête    │  → filtres durs (années, secteur) +
- │ (LLM → SearchFilters)       │    requête sémantique
- └────────────┬─────────────────┘
-              ▼
-    Fusion dense+BM25 (RRF) + filtres durs
-              ▼
-    Rerank + explication (LLM, top ~12)
-              ▼
-        Résultats classés (score + explication ancrée)
+The pipeline combines multimodal CV extraction, deterministic experience calculation, and hybrid retrieval in a shared processing architecture.
+
+```mermaid
+flowchart TB
+    CV(["📄 CV Documents<br/>PDF · DOCX · PPTX"])
+
+    subgraph ING["01 · Document Ingestion"]
+        direction TB
+        EXT["Text Extraction<br/>PyMuPDF · python-docx · python-pptx"]
+        CHECK{"Sufficient text?"}
+        VIS["Vision Fallback<br/>Images → GPT-5"]
+        LLM["Structured LLM Extraction<br/>GPT-5 · Pydantic"]
+        RAW["CVExtraction<br/>Raw dates · No calculations"]
+
+        EXT --> CHECK
+        CHECK -->|Yes| LLM
+        CHECK -->|No, images available| VIS
+        VIS --> LLM
+        LLM --> RAW
+    end
+
+    subgraph PROC["02 · Deterministic Processing"]
+        direction TB
+        EXP["Experience Calculation<br/>100% code · Unit-tested"]
+        MERGE["Merge Overlapping Date Ranges"]
+        PROFILE[("CVProfile<br/>JSON · File-hash cache")]
+
+        EXP --> MERGE --> PROFILE
+    end
+
+    subgraph IDX["03 · Indexing"]
+        direction TB
+        CHUNK["Section-based Chunking"]
+        EMB["Embeddings<br/>text-embedding-3-large<br/>Reduced dimensions"]
+        STORE[("Local Hybrid Store<br/>Dense Vectors + BM25")]
+
+        CHUNK --> EMB --> STORE
+    end
+
+    QUERY(["🔎 Natural Language Query"])
+
+    subgraph RET["04 · Hybrid Retrieval"]
+        direction TB
+        PARSE["Query Understanding<br/>LLM → SearchFilters"]
+        FILTER["Hard Filters + Semantic Query"]
+        SEARCH["Dense Search + BM25"]
+        RRF["Rank Fusion<br/>RRF + Hard Filters"]
+
+        PARSE --> FILTER --> SEARCH --> RRF
+    end
+
+    subgraph RANK["05 · Ranking & Results"]
+        direction TB
+        RERANK["Reranking + Explanation<br/>LLM · Top ~12"]
+        OUT(["Ranked CV Results<br/>Scores + Evidence-grounded Explanations"])
+
+        RERANK --> OUT
+    end
+
+    CV --> EXT
+    RAW --> EXP
+    PROFILE --> CHUNK
+    QUERY --> PARSE
+    STORE --> SEARCH
+    RRF --> RERANK
+
+    classDef input fill:#E0F2FE,stroke:#0284C7,color:#0C4A6E,stroke-width:2px
+    classDef ai fill:#F3E8FF,stroke:#9333EA,color:#581C87,stroke-width:1.5px
+    classDef deterministic fill:#DCFCE7,stroke:#16A34A,color:#14532D,stroke-width:1.5px
+    classDef index fill:#FEF3C7,stroke:#D97706,color:#78350F,stroke-width:1.5px
+    classDef retrieval fill:#E0E7FF,stroke:#4F46E5,color:#312E81,stroke-width:1.5px
+    classDef output fill:#CCFBF1,stroke:#0D9488,color:#134E4A,stroke-width:2px
+    classDef decision fill:#FFF7ED,stroke:#EA580C,color:#9A3412,stroke-width:1.5px
+    classDef storage fill:#F1F5F9,stroke:#475569,color:#0F172A,stroke-width:2px
+
+    class CV,QUERY input
+    class EXT,VIS,LLM,RAW ai
+    class EXP,MERGE deterministic
+    class CHUNK,EMB index
+    class PARSE,FILTER,SEARCH,RRF retrieval
+    class RERANK,OUT output
+    class CHECK decision
+    class PROFILE,STORE storage
+
+    style ING fill:#FAF5FF,stroke:#C084FC,stroke-width:1px
+    style PROC fill:#F0FDF4,stroke:#86EFAC,stroke-width:1px
+    style IDX fill:#FFFBEB,stroke:#FCD34D,stroke-width:1px
+    style RET fill:#EEF2FF,stroke:#A5B4FC,stroke-width:1px
+    style RANK fill:#F0FDFA,stroke:#5EEAD4,stroke-width:1px
 ```
 
-Trois surfaces d'accès à ce pipeline, qui partagent le même code
-(`src/cvsearch/pipeline.py`) pour éviter toute divergence de logique :
-- **API FastAPI** (`/cvs`, `/search`, `/health`) — usage principal / intégration.
-- **UI Streamlit** — démonstration visuelle rapide.
-- **Scripts CLI** (`scripts/ingest.py`, `scripts/eval.py`) — batch et évaluation.
+### Access Interfaces
+
+Three interfaces expose the same pipeline implementation in `src/cvsearch/pipeline.py`, ensuring consistent processing and retrieval logic:
+
+- **FastAPI** (`/cvs`, `/search`, `/health`) — primary interface for application integration.
+- **Streamlit UI** — interactive visual demonstration of the pipeline.
+- **CLI scripts** (`scripts/ingest.py`, `scripts/eval.py`) — batch ingestion and evaluation.
+
+### Key Design Principles
+
+- **Multimodal extraction:** text extraction with a vision fallback when text is insufficient and images are available.
+- **Deterministic experience calculation:** experience duration is calculated in code, with overlapping date ranges merged and logic covered by unit tests.
+- **Hybrid retrieval:** dense vector search and BM25 keyword search are combined through Reciprocal Rank Fusion (RRF).
+- **Evidence-grounded explanations:** ranked results include scores and explanations based on retrieved CV evidence.
+
 
 ## Choix techniques
 
